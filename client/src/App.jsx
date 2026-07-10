@@ -13,6 +13,12 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [view, setView] = useState('events');
 
+  useEffect(() => {
+    // if a token is already in localStorage (e.g. page refresh), we don't
+    // re-derive the user from it here for simplicity — a fresh login is
+    // required. This mirrors the original vanilla version.
+  }, []);
+
   if (!user) return <Login onLogin={setUser} />;
 
   return (
@@ -109,40 +115,29 @@ function Events({ user }) {
         <div className="card card-row" key={ev.id}>
           <div>
             <div className="card-title">#{ev.id} - {ev.title}</div>
-            <div className="card-meta">{ev.date} @ {ev.location}</div>
+            <div className="card-meta">{ev.date} @ {ev.location} · owner_id: {ev.owner_id}</div>
           </div>
           <button onClick={() => open(ev.id)}>Voir</button>
         </div>
       ))}
 
-      {selected && (
-        <EventDetail
-          event={selected}
-          user={user}
-          onChanged={() => { open(selected.id); load(); }}
-          onClosed={() => setSelected(null)}
-        />
-      )}
+      {selected && <EventDetail event={selected} onChanged={() => { open(selected.id); load(); }} onClosed={() => setSelected(null)} />}
     </>
   );
 }
 
-function EventDetail({ event, user, onChanged, onClosed }) {
+function EventDetail({ event, onChanged, onClosed }) {
   const [message, setMessage] = useState('');
-  const [notice, setNotice] = useState('');
-  const isOwner = user && event.owner_id === user.id;
 
   async function editEvent() {
-    const newTitle = prompt('Nouveau titre :');
+    const newTitle = prompt('Nouveau titre (démonstration IDOR : fonctionne même sans être propriétaire) :');
     if (!newTitle) return;
-    const result = await api('/api/events/' + event.id, { method: 'PATCH', body: JSON.stringify({ title: newTitle }) });
-    if (result.error) return setNotice(result.error);
+    await api('/api/events/' + event.id, { method: 'PATCH', body: JSON.stringify({ title: newTitle }) });
     onChanged();
   }
 
   async function deleteEvent() {
-    const result = await api('/api/events/' + event.id, { method: 'DELETE' });
-    if (result.error) return setNotice(result.error);
+    await api('/api/events/' + event.id, { method: 'DELETE' });
     onClosed();
   }
 
@@ -155,16 +150,15 @@ function EventDetail({ event, user, onChanged, onClosed }) {
   return (
     <div className="card">
       <div className="card-title">#{event.id} - {event.title}</div>
-      {/* FIX (Stored XSS): plain JSX text interpolation auto-escapes HTML —
-          no dangerouslySetInnerHTML anywhere on user-controlled content. */}
-      <p>{event.description}</p>
+      {/* VULN #2: STORED XSS SINK — the event description is rendered as raw
+          HTML with dangerouslySetInnerHTML, with no sanitization. React
+          normally auto-escapes text, so this vulnerability requires this
+          explicit (and dangerous) opt-out, exactly as a real developer
+          mistake would look like. */}
+      <p dangerouslySetInnerHTML={{ __html: event.description }} />
       <p className="card-meta">{event.date} @ {event.location} - capacité: {event.capacity}</p>
-      <p className="hint">
-        {isOwner ? 'Vous êtes organisateur de cet événement.' : "Seul l'organisateur peut modifier cet événement."}
-      </p>
-      <button className="ghost" onClick={editEvent}>Modifier</button>
-      <button className="danger" onClick={deleteEvent}>Supprimer</button>
-      {notice && <p className="error">{notice}</p>}
+      <button className="ghost" onClick={editEvent}>Modifier (test IDOR)</button>
+      <button className="danger" onClick={deleteEvent}>Supprimer (test IDOR)</button>
       <textarea placeholder="Message pour l'organisateur..." value={message} onChange={(e) => setMessage(e.target.value)} />
       <button onClick={requestReservation}>Demander une place</button>
     </div>
@@ -173,18 +167,25 @@ function EventDetail({ event, user, onChanged, onClosed }) {
 
 function MyReservations() {
   const [list, setList] = useState([]);
-  useEffect(() => { api('/api/reservations').then(setList); }, []);
+  async function load() { setList(await api('/api/reservations')); }
+  useEffect(() => { load(); }, []);
 
-  // Note: there is intentionally no "self-confirm" action here — only the
-  // event owner (or an admin) can change a reservation's status, enforced
-  // server-side.
+  // Demonstrates the mass-assignment flaw: a visitor confirms their OWN request.
+  async function selfConfirm(id) {
+    await api('/api/reservations/' + id, { method: 'PATCH', body: JSON.stringify({ status: 'confirmed' }) });
+    load();
+  }
+
   return (
     <>
       <div className="section-title">Mes réservations</div>
       {list.map((r) => (
         <div className="card card-row" key={r.id}>
-          <div className="card-title">#{r.id} - événement #{r.event_id}</div>
-          <span className={`badge ${r.status}`}>{r.status}</span>
+          <div>
+            <div className="card-title">#{r.id} - événement #{r.event_id}</div>
+            <span className={`badge ${r.status}`}>{r.status}</span>
+          </div>
+          <button onClick={() => selfConfirm(r.id)}>Auto-confirmer (test)</button>
         </div>
       ))}
     </>
@@ -193,21 +194,22 @@ function MyReservations() {
 
 function OwnerReservations() {
   const [rows, setRows] = useState([]);
-  async function load() { setRows(await api('/api/owner/reservations')); } // now correctly scoped server-side
+  async function load() { setRows(await api('/api/owner/reservations')); } // VULN: not filtered by owner
   useEffect(() => { load(); }, []);
 
   async function respond(id, status) {
-    const result = await api('/api/reservations/' + id, { method: 'PATCH', body: JSON.stringify({ status }) });
-    if (result.error) alert(result.error);
+    await api('/api/reservations/' + id, { method: 'PATCH', body: JSON.stringify({ status }) });
     load();
   }
 
   return (
     <>
-      <div className="section-title">Demandes reçues pour mes événements</div>
+      <div className="section-title">Demandes reçues (popup de validation)</div>
       {rows.map((r) => (
         <div className="comment" key={r.id}>
-          <b>{r.event_title}</b> — user #{r.user_id}: {r.message}{' '}
+          <b>{r.event_title}</b> (owner_id: {r.owner_id}) — user #{r.user_id}:{' '}
+          {/* VULN #2 (again): message rendered as raw HTML too. */}
+          <span dangerouslySetInnerHTML={{ __html: r.message }} />{' '}
           <span className={`badge ${r.status}`}>{r.status}</span>
           <div>
             <button onClick={() => respond(r.id, 'confirmed')}>Accepter</button>
@@ -215,7 +217,6 @@ function OwnerReservations() {
           </div>
         </div>
       ))}
-      {rows.length === 0 && <p className="hint">Aucune demande pour vos événements.</p>}
     </>
   );
 }
@@ -253,9 +254,9 @@ function Admin() {
       <div className="section-title">Utilisateurs (admin)</div>
       {Array.isArray(users) ? (
         users.map((u) => (
-          // FIX (Information Disclosure): the API never returns password
-          // hashes in the first place, so there's nothing sensitive to render.
-          <div className="card" key={u.id}>#{u.id} {u.username} - role: {u.role}</div>
+          <div className="card" key={u.id}>
+            #{u.id} {u.username} - role: {u.role} - password: {u.password}
+          </div>
         ))
       ) : (
         <p className="error">{users?.error}</p>

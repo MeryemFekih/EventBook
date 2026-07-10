@@ -1,18 +1,13 @@
-// api.js — SECURE VERSION
-// FIX (bonus - token in localStorage): the token now lives only in a module-
-// level JS variable, never in localStorage/sessionStorage. It cannot be read
-// by a script running after page load, and disappears on refresh instead of
-// persisting indefinitely.
-let authToken = null;
-
+// api.js — VULNERABLE VERSION
+// VULN (bonus): JWT stored in localStorage -> readable by any injected script.
 export function saveToken(token) {
-  authToken = token;
+  localStorage.setItem('eb_token', token);
 }
 export function getToken() {
-  return authToken;
+  return localStorage.getItem('eb_token');
 }
 export function clearToken() {
-  authToken = null;
+  localStorage.removeItem('eb_token');
 }
 
 export async function api(path, opts = {}) {
@@ -21,7 +16,7 @@ export async function api(path, opts = {}) {
     headers: {
       'Content-Type': 'application/json',
       ...(opts.headers || {}),
-      Authorization: 'Bearer ' + (authToken || ''),
+      Authorization: 'Bearer ' + (getToken() || ''),
     },
   });
   return res.json();
