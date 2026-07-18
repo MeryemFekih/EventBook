@@ -1,5 +1,3 @@
-// seed.js — creates test accounts and sample events (SECURE VERSION)
-// Passwords are now hashed with bcrypt before being stored.
 const bcrypt = require('bcryptjs');
 const db = require('./db');
 
