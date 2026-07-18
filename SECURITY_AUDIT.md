@@ -6,8 +6,6 @@ EventBook est une plateforme de gestion d'événements avec réservation de plac
 
 Tout utilisateur authentifié peut créer un événement et en devenir l'organisateur (propriétaire). Les autres utilisateurs (visiteurs) parcourent les événements et demandent une place ; l'organisateur reçoit une notification et peut accepter ou refuser la demande. Chaque utilisateur dispose d'un centre de notifications. Un rôle `admin` gère l'ensemble des utilisateurs, événements et réservations.
 
-Stack technique : Node.js/Express, SQLite (`better-sqlite3`), JWT, frontend React (Vite).
-
 Le dépôt contient deux branches :
 
 * `vulnerable` : version volontairement vulnérable
@@ -21,19 +19,10 @@ cd eventbook
 git checkout vulnerable   # ou: git checkout secure
 npm install
 npm run seed
-npm start                 # backend + frontend React déjà construit, sur http://localhost:3000
+npm start                
 ```
 
-Pour modifier le frontend React (optionnel) :
-
-```bash
-cd client
-npm install
-npm run dev      # serveur de dev Vite sur http://localhost:5173 (proxy /api vers :3000)
-npm run build    # regénère le build dans ../public, servi par Express
-```
-
-## 3. Comptes de test
+## 3. Comptes de test (fausse données par seed)
 
 | Utilisateur | Mot de passe | Rôle  | Contexte |
 |-------------|--------------|-------|----------|
@@ -41,12 +30,8 @@ npm run build    # regénère le build dans ../public, servi par Express
 | bob         | bob123       | user  | visiteur, a 2 demandes de réservation en attente |
 | admin       | admin123     | admin | administrateur |
 
-## 4. Organisation Git
 
-* `vulnerable` : failles volontaires, commentées `// VULN #...` (backend Express + frontend React avec `dangerouslySetInnerHTML` et token en `localStorage`)
-* `secure` : corrections à la racine, commentées `// FIX #...` (même stack, frontend React sans `dangerouslySetInnerHTML`, token en mémoire)
-
-## 5. Liste des vulnérabilités intégrées
+## 4. Liste des vulnérabilités intégrées
 
 Vulnérabilités obligatoires :
 
@@ -65,9 +50,9 @@ Vulnérabilités bonus intégrées :
 * Information Disclosure : stack traces et requêtes SQL renvoyées, mots de passe exposés par `/api/admin/users`
 * CORS permissif, absence de headers de sécurité, token en `localStorage`, secret JWT en dur
 
-## 6. Audit détaillé des vulnérabilités
+## 5. Audit détaillé des vulnérabilités
 
-### 6.1 Broken Access Control / IDOR (événements)
+### 5.1 Broken Access Control / IDOR (événements)
 
 * **Endpoint** : `PATCH /api/events/:id`, `DELETE /api/events/:id`
 * **Cause technique** : la route récupère l'événement uniquement par son `id`, sans jamais comparer `event.owner_id` à `req.user.id`.
@@ -84,7 +69,7 @@ Vulnérabilités bonus intégrées :
 * **Correction** : vérification `event.owner_id === req.user.id || req.user.role === 'admin'` avant toute modification/suppression, réponse `403 Forbidden` sinon.
 * **Validation** : la même requête avec le token de `bob` renvoie `{"error":"Only the event owner can edit this event"}`.
 
-### 6.2 XSS stockée
+### 5.2 XSS stockée
 
 * **Endpoint / zone** : description d'événement (`POST`/`PATCH /api/events`) et message de demande de réservation (`POST /api/events/:id/reservations`).
 * **Particularité React** : React échappe automatiquement le contenu texte inséré via `{...}` dans le JSX — ce n'est donc **pas** une vulnérabilité "par défaut" du framework. Ici, le composant `EventDetail` utilise explicitement `dangerouslySetInnerHTML={{ __html: event.description }}` (et `OwnerReservations` fait de même pour `r.message`), ce qui désactive volontairement cette protection — une erreur de développeur réelle et fréquente (souvent introduite pour permettre un peu de mise en forme HTML dans une description, sans validation de ce qui est accepté).
@@ -95,7 +80,7 @@ Vulnérabilités bonus intégrées :
 * **Correction** : suppression de tout `dangerouslySetInnerHTML` sur du contenu utilisateur ; retour à l'interpolation JSX classique (`<p>{event.description}</p>`, `<span>{r.message}</span>`) qui échappe automatiquement le HTML. Échappement supplémentaire côté serveur (`escapeHtml`) en défense en profondeur.
 * **Validation** : le payload `<script>...</script>` est affiché tel quel comme texte visible à l'écran (balises comprises), sans jamais s'exécuter.
 
-### 6.3 Injection SQL
+### 5.3 Injection SQL
 
 * **Endpoint** : `POST /api/auth/login`, `GET /api/events/search/query`
 * **Payload** : `{"username":"admin' -- ","password":"x"}`
@@ -105,7 +90,7 @@ Vulnérabilités bonus intégrées :
 * **Correction** : requêtes paramétrées (`db.prepare('... WHERE username = ?').get(username)`), `bcrypt.compareSync` pour la vérification du mot de passe.
 * **Validation** : le même payload renvoie `{"error":"Invalid username or password"}`.
 
-### 6.4 Mass Assignment
+### 5.4 Mass Assignment
 
 * **Endpoints** : `PATCH /api/users/me` (rôle), `PATCH /api/reservations/:id` (statut)
 * **Description** :
@@ -124,7 +109,7 @@ Vulnérabilités bonus intégrées :
   2. `PATCH /api/reservations/:id` vérifie désormais `event.owner_id === req.user.id || req.user.role === 'admin'` avant tout changement de statut.
 * **Validation** : les deux payloads sont soit ignorés (rôle reste `user`) soit rejetés (`403 Forbidden` sur la tentative d'auto-confirmation) ; en revanche, la même requête envoyée par `alice` (la vraie organisatrice) réussit normalement.
 
-### 6.5 Vulnérabilités bonus (résumé)
+### 5.5 Vulnérabilités bonus (résumé)
 
 | Faille | Preuve (vulnerable) | Correction (secure) |
 |---|---|---|
@@ -139,7 +124,7 @@ Vulnérabilités bonus intégrées :
 | Token en `localStorage` | `localStorage.setItem('eb_token', ...)` | Token en mémoire uniquement |
 | Secret JWT en dur | `'secret123'` | `process.env.JWT_SECRET` |
 
-## 7. Corrections appliquées dans la branche `secure`
+## 6. Corrections appliquées dans la branche `secure`
 
 * IDOR → vérification d'ownership (`owner_id`/`user_id`) systématique côté backend sur événements, réservations et notifications.
 * Injection SQL → requêtes paramétrées partout.
@@ -147,7 +132,7 @@ Vulnérabilités bonus intégrées :
 * Mass Assignment → whitelist des champs éditables ; changement de rôle et changement de statut de réservation déplacés vers des points d'entrée dédiés et protégés par rôle/ownership.
 * Renforcements bonus : `bcrypt`, `helmet`, `express-rate-limit`, CORS restrictif, JWT courte durée, suppression des fuites d'information, token en mémoire.
 
-## 8. Validation après correction
+## 7. Validation après correction
 
 Rejeu des mêmes payloads que lors de l'exploitation initiale, sur la branche `secure` :
 
@@ -159,7 +144,7 @@ Rejeu des mêmes payloads que lors de l'exploitation initiale, sur la branche `s
 * XSS stockée : payload affiché en texte échappé, aucune exécution.
 * Flux légitime (l'organisatrice `alice` confirme la demande de `bob`) : **fonctionne toujours normalement**, preuve que la correction ne casse pas le cas d'usage réel.
 
-## 9. Limites du projet
+## 8. Limites du projet
 
 * Pas de gestion de la capacité maximale de l'événement (une réservation confirmée ne vérifie pas si l'événement est complet) — hors périmètre sécurité.
 * Pas de pipeline CI/CD automatisé (bonus non implémenté).
@@ -167,6 +152,6 @@ Rejeu des mêmes payloads que lors de l'exploitation initiale, sur la branche `s
 * Base SQLite locale, adaptée à la démonstration uniquement.
 * Tests manuels via `curl`, pas de suite de tests automatisés.
 
-## 10. Conclusion
+## 9. Conclusion
 
 EventBook illustre, sur une plateforme d'événements avec un workflow de validation à deux rôles (organisateur/visiteur) et un système de notifications, le cycle complet **faille → exploitation → impact → correction → validation** pour les quatre vulnérabilités obligatoires — avec une attention particulière portée au Mass Assignment, décliné ici en deux variantes réalistes (élévation de rôle globale, et contournement d'un processus de validation métier spécifique à l'application). Chaque correction traite la cause racine et a été revérifiée avec les payloads exacts ayant permis l'exploitation initiale, sans casser les flux légitimes.
