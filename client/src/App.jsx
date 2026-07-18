@@ -155,8 +155,7 @@ function EventDetail({ event, user, onChanged, onClosed }) {
   return (
     <div className="card">
       <div className="card-title">#{event.id} - {event.title}</div>
-      {/* FIX (Stored XSS): plain JSX text interpolation auto-escapes HTML —
-          no dangerouslySetInnerHTML anywhere on user-controlled content. */}
+      
       <p>{event.description}</p>
       <p className="card-meta">{event.date} @ {event.location} - capacité: {event.capacity}</p>
       <p className="hint">
@@ -175,9 +174,7 @@ function MyReservations() {
   const [list, setList] = useState([]);
   useEffect(() => { api('/api/reservations').then(setList); }, []);
 
-  // Note: there is intentionally no "self-confirm" action here — only the
-  // event owner (or an admin) can change a reservation's status, enforced
-  // server-side.
+  
   return (
     <>
       <div className="section-title">Mes réservations</div>
@@ -253,8 +250,6 @@ function Admin() {
       <div className="section-title">Utilisateurs (admin)</div>
       {Array.isArray(users) ? (
         users.map((u) => (
-          // FIX (Information Disclosure): the API never returns password
-          // hashes in the first place, so there's nothing sensitive to render.
           <div className="card" key={u.id}>#{u.id} {u.username} - role: {u.role}</div>
         ))
       ) : (
