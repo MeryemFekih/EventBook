@@ -1,6 +1,3 @@
-// server.js — EventBook API (SECURE VERSION)
-// Fixes the root cause of every vulnerability documented in SECURITY_AUDIT.md.
-
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -14,10 +11,8 @@ const db = require('./db');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// FIX (bonus - weak secret): env var, random fallback in dev.
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 
-// FIX (bonus - security headers)
 app.use(
   helmet({
     contentSecurityPolicy: {
@@ -31,14 +26,12 @@ app.use(
   })
 );
 
-// FIX (bonus - CORS misconfiguration): explicit allow-list.
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000').split(',');
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }));
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// FIX (bonus - no rate limiting)
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
@@ -47,7 +40,6 @@ const loginLimiter = rateLimit({
   message: { error: 'Too many login attempts. Please try again later.' },
 });
 
-// ---------- Helpers ----------
 function escapeHtml(str = '') {
   return String(str)
     .replace(/&/g, '&amp;')
@@ -65,7 +57,6 @@ function authMiddleware(req, res, next) {
     req.user = jwt.verify(token, JWT_SECRET);
     next();
   } catch (err) {
-    // FIX (Information Disclosure): generic message only.
     return res.status(401).json({ error: 'Invalid or expired session' });
   }
 }
@@ -84,9 +75,7 @@ function notify(userId, message) {
   db.prepare('INSERT INTO notifications (user_id, message) VALUES (?, ?)').run(userId, message);
 }
 
-// ---------- AUTH ----------
-// FIX #3 (SQLi): parameterized query. FIX #4a (weak auth): bcrypt, generic
-// error, rate limiting.
+
 app.post('/api/auth/login', loginLimiter, (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) return res.status(400).json({ error: 'Username and password are required' });
@@ -104,8 +93,7 @@ app.post('/api/auth/login', loginLimiter, (req, res) => {
   }
 });
 
-// ---------- USERS ----------
-// FIX #4a (Mass Assignment): whitelist, "role" always ignored from the client.
+
 app.patch('/api/users/me', authMiddleware, (req, res) => {
   try {
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
@@ -127,7 +115,6 @@ app.patch('/api/users/me', authMiddleware, (req, res) => {
   }
 });
 
-// FIX (Broken Access Control): admin-only, no password hashes returned.
 app.get('/api/admin/users', authMiddleware, requireAdmin, (req, res) => {
   try {
     res.json(db.prepare('SELECT id, username, role FROM users').all());
@@ -143,7 +130,6 @@ app.patch('/api/admin/users/:id/role', authMiddleware, requireAdmin, (req, res) 
   res.json({ message: 'Role updated' });
 });
 
-// ---------- EVENTS ----------
 app.get('/api/events', authMiddleware, (req, res) => {
   try {
     res.json(db.prepare('SELECT * FROM events').all());
@@ -177,7 +163,6 @@ app.post('/api/events', authMiddleware, (req, res) => {
   }
 });
 
-// FIX #1 (IDOR): only the event owner or an admin may edit/delete.
 app.patch('/api/events/:id', authMiddleware, (req, res) => {
   try {
     const event = db.prepare('SELECT * FROM events WHERE id = ?').get(req.params.id);
@@ -214,7 +199,6 @@ app.delete('/api/events/:id', authMiddleware, (req, res) => {
   }
 });
 
-// FIX #3 (SQLi in search): parameterized.
 app.get('/api/events/search/query', authMiddleware, (req, res) => {
   const q = req.query.q || '';
   try {
@@ -225,8 +209,7 @@ app.get('/api/events/search/query', authMiddleware, (req, res) => {
   }
 });
 
-// ---------- RESERVATIONS ----------
-// FIX #2 (Stored XSS): message escaped before storage.
+
 app.post('/api/events/:id/reservations', authMiddleware, (req, res) => {
   const { message } = req.body;
   try {
@@ -250,8 +233,6 @@ app.get('/api/reservations', authMiddleware, (req, res) => {
   }
 });
 
-// FIX (Broken Access Control): properly scoped to events the caller owns
-// (or all, for an admin) instead of returning every reservation to anyone.
 app.get('/api/owner/reservations', authMiddleware, (req, res) => {
   try {
     const rows =
@@ -270,8 +251,7 @@ app.get('/api/owner/reservations', authMiddleware, (req, res) => {
   }
 });
 
-// FIX #1 (IDOR) + FIX #4b (Mass Assignment): only the event's owner (or an
-// admin) may confirm/reject a reservation — never the requester themselves.
+
 app.patch('/api/reservations/:id', authMiddleware, (req, res) => {
   try {
     const { status } = req.body;
@@ -294,7 +274,6 @@ app.patch('/api/reservations/:id', authMiddleware, (req, res) => {
   }
 });
 
-// FIX #1 (IDOR): only the requester, the event owner, or an admin may cancel.
 app.delete('/api/reservations/:id', authMiddleware, (req, res) => {
   try {
     const reservation = db.prepare('SELECT * FROM reservations WHERE id = ?').get(req.params.id);
@@ -309,7 +288,6 @@ app.delete('/api/reservations/:id', authMiddleware, (req, res) => {
   }
 });
 
-// ---------- NOTIFICATIONS ----------
 app.get('/api/notifications', authMiddleware, (req, res) => {
   try {
     res.json(db.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC').all(req.user.id));
@@ -318,7 +296,6 @@ app.get('/api/notifications', authMiddleware, (req, res) => {
   }
 });
 
-// FIX (IDOR): ownership check before marking a notification as read.
 app.patch('/api/notifications/:id/read', authMiddleware, (req, res) => {
   try {
     const notif = db.prepare('SELECT * FROM notifications WHERE id = ?').get(req.params.id);
